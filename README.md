@@ -1,6 +1,6 @@
 # 16×16 LED Board (ESP32-C6)
 
-Firmware for driving a 16 × 16 monochrome LED matrix through four daisy-chained 74HC595 shift registers on an ESP32‑C6. The codebase offers a tiny framebuffer, animated text and image renderers, and a Wi‑Fi web UI that accepts ordinary image uploads and converts them in the browser to the panel’s native 1‑bit format.
+Firmware for the DIY 16 × 16 LED board kit (see photos in `docs/board_diy_kit.jpg`, `docs/board_assembled.jpg`, and the schematic in `docs/board_schematic.jpg`). It drives the matrix through four daisy-chained 74HC595 shift registers on an ESP32‑C6. The codebase offers a tiny framebuffer, animated text and image renderers, and a Wi‑Fi web UI that accepts ordinary image uploads and converts them in the browser to the panel’s native 1‑bit format.
 
 ## Features
 - **Matrix driver** – `Matrix16x16` maintains per-row bitfields and streams them to the register chain.
@@ -34,6 +34,10 @@ Default pins (override via `platformio.ini` build flags or `src/ShiftRegisterCha
 | `SR_PIN_OE`    | 0  | Active-low output enable. NOTE: not connected on the board |
 
 Rows occupy the upper 16 bits of the shifted word, and both rows/columns default to active-high, MSB-first order. Adjust the `ROW_*` / `COL_*` build flags if your wiring differs. Logical coordinates use `(0,0)` at the top-left LED, `x` increases rightward, `y` downward.
+
+### DIY Kit Notes
+- To articulate the board with an ESP32 or other external controller, use the external pin header; do **not** populate the onboard DX156 microcontroller (U1) from the kit.
+- The photos in `docs/` show the raw kit, an assembled example, and the wiring schematic for reference while soldering.
 
 ## Build & Test
 ```bash
