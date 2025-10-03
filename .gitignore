@@ -1,0 +1,10 @@
+.pio/
+.vscode/
+.ccls*
+*.map
+*.elf
+*.bin
+*.hex
+
+# === User secrets and local config ===
+secrets.h
