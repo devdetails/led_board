@@ -1,6 +1,13 @@
-# 16×16 LED Board (ESP32-C6)
+# Controller for 16×16 DIY LED Board
 
-Firmware for the DIY 16 × 16 LED board kit (see photos in `docs/board_diy_kit.jpg`, `docs/board_assembled.jpg`, and the schematic in `docs/board_schematic.jpg`). It drives the matrix through four daisy-chained 74HC595 shift registers on an ESP32‑C6. The codebase offers a tiny framebuffer, animated text and image renderers, and a Wi‑Fi web UI that accepts ordinary image uploads and converts them in the browser to the panel’s native 1‑bit format.
+Firmware controlling a 16 × 16 LED DIY soldering kit as for example found on [aliexpress](https://de.aliexpress.com/item/1005007842230324.html): <a href="docs/board_diy_kit.jpg" target="_blank" rel="noopener">
+  DIY kit</a>, <a href="docs/board_schematic.jpg" target="_blank" rel="noopener">
+  board schematic</a>. The LED matrix is driven through four daisy-chained 74HC595 shift registers and controlled by an ESP32‑C6 via SPI and GPIOs. The codebase offers a tiny framebuffer, animated text and image renderers, and a Wi‑Fi web UI that accepts ordinary image uploads and converts them in the browser to the panel’s native 1‑bit format.
+
+<div align="center">
+  <img src="docs/webinterface.jpg" alt="Web interface" width="45%" />
+  <img src="docs/board_assembled.jpg" alt="Fully assembled board" width="45%" />
+</div>
 
 ## Features
 - **Matrix driver** – `Matrix16x16` maintains per-row bitfields and streams them to the register chain.
@@ -26,12 +33,15 @@ Firmware for the DIY 16 × 16 LED board kit (see photos in `docs/board_diy_k
 ## Hardware Pins
 Default pins (override via `platformio.ini` build flags or `src/ShiftRegisterChain.h`):
 
-| Signal | Default pin | Notes |
-| ------ | ----------- | ----- |
-| `SR_PIN_DATA`  | 1  | 595 SER input |
-| `SR_PIN_CLK`   | 3  | 595 SRCLK |
-| `SR_PIN_LATCH` | 2  | 595 RCLK |
-| `SR_PIN_OE`    | 0  | Active-low output enable. NOTE: not connected on the board |
+| Signal | [ESP32-C6 supermini](https://www.espboards.dev/esp32/esp32-c6-super-mini/) | LED board | Notes |
+| -------------- | ----------- | ----- |-------------------------------------------------------------------- |
+| `SR_PIN_DATA`  | 1           | IN    | 595 SER input                                                       |
+| `SR_PIN_CLK`   | 3           | CLK   | 595 SRCLK                                                           |
+| `SR_PIN_LATCH` | 2           | STB   | 595 RCLK                                                            |
+| `SR_PIN_OE`    | 0           | OE    | NOTE: not connected on the board                                    |
+| 5V VCC         | 5V          | VCC   | Board is powered by 5V but 74HC595 can live with 3.3V logic levels  |
+| GND            | GND         | GND   | Ground                                                              |
+
 
 Rows occupy the upper 16 bits of the shifted word, and both rows/columns default to active-high, MSB-first order. Adjust the `ROW_*` / `COL_*` build flags if your wiring differs. Logical coordinates use `(0,0)` at the top-left LED, `x` increases rightward, `y` downward.
 
