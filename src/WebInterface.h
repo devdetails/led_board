@@ -19,5 +19,7 @@ void WebInterface_begin(AnimatedText& animatedText,
 
 void        WebInterface_handle();
 DisplayMode WebInterface_getDisplayMode();
+uint16_t    WebInterface_getBrightnessDuty();
+uint16_t    WebInterface_getBrightnessScale();
 
 

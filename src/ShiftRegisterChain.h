@@ -16,7 +16,7 @@ public:
     int getOePin()    const;
 
 private:
-    SPISettings spiSettings { 1'000'000, SPI_LSBFIRST, SPI_MODE0 };
+    SPISettings spiSettings { SHIFTREG_SPI_FREQUENCY_HZ, SPI_LSBFIRST, SPI_MODE0 };
     bool        spiInitialized = false;
 
     int dataPin  = PIN_SR_DATA; 
@@ -24,5 +24,3 @@ private:
     int latchPin = PIN_SR_LATCH;
     int oePin    = PIN_SR_OE;
 };
-
-

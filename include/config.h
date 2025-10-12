@@ -8,7 +8,7 @@ constexpr int      PIN_SR_CLK   = 3;
 constexpr int      PIN_SR_LATCH = 2;
 constexpr int      PIN_SR_OE    = 0;
 
-constexpr uint32_t SHIFTREG_SPI_FREQUENCY_HZ = 1'000'000;
+constexpr uint32_t SHIFTREG_SPI_FREQUENCY_HZ = 4'000'000;
 
 // Animated text defaults
 constexpr const char* DEFAULT_INITIAL_TEXT                  = "Hello World  ";

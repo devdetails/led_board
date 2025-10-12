@@ -4,6 +4,7 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
+#include <math.h>
 #include <algorithm>
 #include <cctype>
 #include <string>
@@ -18,6 +19,36 @@ WebServer       httpServer(80);
 
 DisplayMode        gDisplayMode = DisplayMode::Text;
 std::vector<Image> imageFrames;
+
+constexpr float        kBrightnessGamma      = 2.2f;
+constexpr uint16_t     kBrightnessFixedScale = 32;
+uint16_t               gBrightnessDuty       = kBrightnessFixedScale;
+uint8_t                gBrightnessPercent    = 100;
+
+void updateBrightnessFromPercent(uint8_t percent)
+{
+    if (percent > 100)
+        percent = 100;
+
+    gBrightnessPercent = percent;
+
+    if (percent == 0)
+    {
+        gBrightnessDuty = 0;
+        return;
+    }
+
+    float normalized = static_cast<float>(percent) / 100.0f;
+    float corrected  = powf(normalized, kBrightnessGamma);
+
+    uint16_t duty = static_cast<uint16_t>(corrected * static_cast<float>(kBrightnessFixedScale) + 0.5f);
+    if (duty == 0)
+        duty = 1;
+    if (duty > kBrightnessFixedScale)
+        duty = kBrightnessFixedScale;
+
+    gBrightnessDuty = duty;
+}
 
 String htmlEscape(const std::string& text)
 {
@@ -128,6 +159,19 @@ String buildStateJsonPayload()
 {
     String payload;
     payload.reserve(256 + static_cast<int>(imageFrames.size()) * 68);
+    const AnimatedText* textSource = gAnimatedText;
+    std::string textValue          = textSource ? textSource->getText() : std::string(DEFAULT_INITIAL_TEXT);
+    AnimatedText::AnimationMode textMode = textSource 
+        ?  textSource->getAnimationMode()
+        : (DEFAULT_TEXT_ANIMATION_MODE == 0 ? AnimatedText::AnimationMode::Hold : AnimatedText::AnimationMode::Scroll);
+    uint32_t textFrameDuration = textSource 
+        ?  textSource->getFrameDuration()
+        : (textMode == AnimatedText::AnimationMode::Scroll ? DEFAULT_TEXT_FRAME_DURATION_LOOP_MS : DEFAULT_TEXT_FRAME_DURATION_HOLD_MS);
+
+    const AnimatedImage* imageSource = gAnimatedImage;
+    uint32_t imageFrameDuration      = imageSource ? imageSource->getFrameDuration() : DEFAULT_IMAGE_FRAME_DURATION_MS;
+    bool     imageLoop               = imageSource ? imageSource->isLooping()        : DEFAULT_IMAGE_LOOPING;
+
     payload += F("{");
     payload += F("\"mode\":\"");
     payload += (gDisplayMode == DisplayMode::Text) ? F("text") : F("image");
@@ -135,20 +179,20 @@ String buildStateJsonPayload()
 
     payload += F("\"text\":{");
     payload += F("\"value\":\"");
-    payload += jsonEscape(gAnimatedText->getText());
+    payload += jsonEscape(textValue);
     payload += F("\",\"animation\":\"");
-    payload += (gAnimatedText->getAnimationMode() == AnimatedText::AnimationMode::Scroll) ? F("scroll") : F("hold");
+    payload += (textMode == AnimatedText::AnimationMode::Scroll) ? F("scroll") : F("hold");
     payload += F("\",\"frameDuration\":");
-    payload += String(gAnimatedText->getFrameDuration());
+    payload += String(textFrameDuration);
     payload += F("},");
 
     payload += F("\"images\":{");
     payload += F("\"count\":");
     payload += String(static_cast<unsigned long>(imageFrames.size()));
     payload += F(",\"frameDuration\":");
-    payload += String(gAnimatedImage->getFrameDuration());
+    payload += String(imageFrameDuration);
     payload += F(",\"loop\":");
-    payload += gAnimatedImage->isLooping() ? F("true") : F("false");
+    payload += imageLoop ? F("true") : F("false");
     if (!imageFrames.empty())
     {
         payload += F(",\"firstFrame\":\"");
@@ -156,8 +200,17 @@ String buildStateJsonPayload()
         payload += F("\"");
     }
     payload += F("}");
+    payload += F(",\"brightness\":{");
+    payload += F("\"percent\":");
+    payload += String(gBrightnessPercent);
+    payload += F(",\"duty\":");
+    payload += String(static_cast<float>(gBrightnessDuty) / static_cast<float>(kBrightnessFixedScale), 4);
+    payload += F(",\"scale\":");
+    payload += String(kBrightnessFixedScale);
+    payload += F("}");
 
     payload += F("}");
+    Serial.println(payload);
     return payload;
 }
 
@@ -173,6 +226,8 @@ String buildHtml()
     page += F("h1{font-weight:600;margin-bottom:1.2rem;}section{margin-bottom:2rem;}");
     page += F(".card{background:#151515;border-radius:16px;padding:1.5rem;box-shadow:0 0 24px rgba(0,0,0,0.4);max-width:520px;}");
     page += F("label{display:block;margin-top:1rem;font-weight:600;}input[type=text],select,input[type=number]{width:100%;padding:0.65rem;border-radius:10px;border:1px solid #2b2b2b;background:#0e0e0e;color:#f4f4f4;margin-top:0.35rem;box-sizing:border-box;}");
+    page += F("input[type=range]{width:100%;margin-top:0.35rem;}");
+    page += F(".note{margin-top:0.8rem;font-size:0.85rem;color:#777;}");
     page += F("button{margin-top:1.2rem;border:none;border-radius:999px;padding:0.7rem 1.6rem;font-size:1rem;cursor:pointer;background:#0d6efd;color:#fff;transition:background 0.2s;}button:hover{background:#2680ff;}");
     page += F(".secondary{background:#333;} .secondary:hover{background:#3f3f3f;}");
     page += F("#status{margin-top:1rem;padding:0.8rem;border-radius:10px;background:#10253d;border:1px solid #1c4a7d;display:none;}");
@@ -182,6 +237,10 @@ String buildHtml()
     page += F(".footer{margin-top:2rem;color:#888;}");
     page += F("</style></head><body><h1>LED Matrix Controller</h1><div class=\"grid\">");
 
+    page += F("<section class=\"card\"><h2>Brightness</h2>");
+    page += F("<div class=\"range-group\"><label for=\"brightnessRange\">Brightness</label><input id=\"brightnessRange\" type=\"range\" min=\"0\" max=\"100\" step=\"1\" value=\"100\"><div class=\"range-scale\"><span>0%</span><span id=\"brightnessValue\" class=\"range-value\">100%</span><span>100%</span></div></div>");
+    page += F("<p class=\"note\">Gamma corrected frame skipping dims the display smoothly.</p>");
+    page += F("</section>");
     page += F("<section class=\"card\"><h2>Text Animation</h2>");
     page += F("<form id=\"textForm\"><label for=\"textInput\">Text</label><input id=\"textInput\" name=\"text\" maxlength=\"64\" placeholder=\"Enter message\" required>");
     page += F("<label for=\"textMode\">Animation Mode</label><select id=\"textMode\" name=\"mode\"><option value=\"hold\">Hold (static)</option><option value=\"scroll\">Scroll</option></select>");
@@ -206,11 +265,16 @@ String buildHtml()
     page += F("const initialState=");
     page += stateJson;
     page += F(";\n");
-    page += F("const statusBox=document.getElementById('status');const textForm=document.getElementById('textForm');const textInput=document.getElementById('textInput');const textMode=document.getElementById('textMode');const textFrame=document.getElementById('textFrame');const activateTextBtn=document.getElementById('activateText');const imageFiles=document.getElementById('imageFiles');const imageFrame=document.getElementById('imageFrame');const imageLoop=document.getElementById('imageLoop');const uploadImagesBtn=document.getElementById('uploadImages');const activateImageBtn=document.getElementById('activateImage');const imageSummary=document.getElementById('imageSummary');const imageThreshold=document.getElementById('imageThreshold');const thresholdValue=document.getElementById('thresholdValue');const imageInvert=document.getElementById('imageInvert');const previewCanvas=document.getElementById('imagePreview');const previewCtx=previewCanvas.getContext('2d');const previewHint=document.getElementById('previewHint');\n");
+    page += F("const statusBox=document.getElementById('status');const brightnessRange=document.getElementById('brightnessRange');const brightnessValue=document.getElementById('brightnessValue');const textForm=document.getElementById('textForm');const textInput=document.getElementById('textInput');const textMode=document.getElementById('textMode');const textFrame=document.getElementById('textFrame');const activateTextBtn=document.getElementById('activateText');const imageFiles=document.getElementById('imageFiles');const imageFrame=document.getElementById('imageFrame');const imageLoop=document.getElementById('imageLoop');const uploadImagesBtn=document.getElementById('uploadImages');const activateImageBtn=document.getElementById('activateImage');const imageSummary=document.getElementById('imageSummary');const imageThreshold=document.getElementById('imageThreshold');const thresholdValue=document.getElementById('thresholdValue');const imageInvert=document.getElementById('imageInvert');const previewCanvas=document.getElementById('imagePreview');const previewCtx=previewCanvas.getContext('2d');const previewHint=document.getElementById('previewHint');\n");
+    page += F("let brightnessUpdateTimer=null;\n");
     page += F("let previewSourceImage=null;\n");
     page += F("let currentState=initialState||null;\n");
-    page += F("let currentDeviceFrameHex=currentState&&currentState.images?currentState.images.firstFrame||null:null;\n");
+    page += F("let currentDeviceFrameHex=currentState&&currentState.images?currentState.images.firstFrame||null:null;setBrightnessUI(currentState&&currentState.brightness?Number(currentState.brightness.percent):100);\n");
     page += F("function showStatus(msg,isError=false){statusBox.style.display='block';statusBox.textContent=msg;statusBox.style.background=isError?'#3d1010':'#10253d';statusBox.style.borderColor=isError?'#802525':'#1c4a7d';}\n");
+    page += F("function updateBrightnessLabel(){const numeric=Number(brightnessRange.value);const clamped=Number.isFinite(numeric)?numeric:0;brightnessValue.textContent=Math.round(clamped)+'%';}\n");
+    page += F("function setBrightnessUI(value){const numeric=Number(value);const clamped=Number.isFinite(numeric)?Math.min(Math.max(numeric,0),100):100;brightnessRange.value=clamped;brightnessValue.textContent=Math.round(clamped)+'%';}\n");
+    page += F("async function postBrightness(value){try{const params=new URLSearchParams();params.set('value',value);const res=await fetch('/api/brightness',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params});const data=await res.json();if(!res.ok||!data.ok)throw new Error(data.message||'Brightness update failed');if(data.brightness&&typeof data.brightness.percent==='number'){setBrightnessUI(Number(data.brightness.percent));}if(data.message){showStatus(data.message);}else{showStatus('Brightness updated');}}catch(err){console.error(err);showStatus(err.message||'Brightness update failed',true);}}\n");
+    page += F("function scheduleBrightnessUpdate(immediate=false){if(brightnessUpdateTimer){clearTimeout(brightnessUpdateTimer);brightnessUpdateTimer=null;}if(immediate){postBrightness(brightnessRange.value);return;}brightnessUpdateTimer=setTimeout(()=>{brightnessUpdateTimer=null;postBrightness(brightnessRange.value);},150);}\n");
     page += F("function updateThresholdLabel(){thresholdValue.textContent=imageThreshold.value;}\n");
     page += F("function clearPreview(){previewCtx.fillStyle='#121212';previewCtx.fillRect(0,0,previewCanvas.width,previewCanvas.height);previewHint.textContent='Select an image to see the conversion preview.';}\n");
     page += F("function drawPreview(pixels){const scale=previewCanvas.width/16;previewCtx.fillStyle='#050505';previewCtx.fillRect(0,0,previewCanvas.width,previewCanvas.height);for(let y=0;y<16;y++){for(let x=0;x<16;x++){previewCtx.fillStyle=pixels[y][x]?'#00ffc8':'#1a1a1a';previewCtx.fillRect(x*scale,y*scale,scale,scale);}}}\n");
@@ -220,7 +284,7 @@ String buildHtml()
     page += F("function imageToFrameData(img,threshold,invert){workingCtx.clearRect(0,0,16,16);workingCtx.drawImage(img,0,0,16,16);const data=workingCtx.getImageData(0,0,16,16).data;const bytes=new Uint8Array(32);const pixels=Array.from({length:16},()=>Array(16).fill(0));for(let y=0;y<16;y++){let row=0;for(let x=0;x<16;x++){const idx=(y*16+x)*4;const a=data[idx+3];let lit=0;if(a>0){const r=data[idx];const g=data[idx+1];const b=data[idx+2];const lum=0.2126*r+0.7152*g+0.0722*b;lit=lum>threshold?1:0;}if(invert){lit=lit?0:1;}row=(row<<1)|lit;pixels[y][x]=lit;}bytes[y*2]=(row>>8)&0xFF;bytes[y*2+1]=row&0xFF;}return {bytes,pixels,hex:toHex(bytes)};}\n");
     page += F("async function fileToFrame(file,threshold,invert){const img=await loadImageFromFile(file);return {image:img,...imageToFrameData(img,threshold,invert)};}\n");
     page += F("function drawFramePreviewFromHex(hex){if(!hex||hex.length!==64){clearPreview();previewHint.textContent='No image loaded on device.';return;}const pixels=Array.from({length:16},()=>Array(16).fill(0));for(let y=0;y<16;y++){const row=parseInt(hex.slice(y*4,y*4+4),16);if(Number.isNaN(row)){clearPreview();return;}for(let x=0;x<16;x++){pixels[y][x]=(row>>(15-x))&1;}}drawPreview(pixels);previewHint.textContent='Preview shows current device frame.';}\n");
-    page += F("function applyState(data,{preservePreview=false}={}){currentState=data||null;currentDeviceFrameHex=currentState&&currentState.images?currentState.images.firstFrame||null:null;if(data&&data.text){textInput.value=data.text.value||'';textMode.value=data.text.animation||'hold';textFrame.value=data.text.frameDuration;}else{textInput.value='';textMode.value='hold';}if(data&&data.images){imageFrame.value=data.images.frameDuration;imageLoop.checked=!!data.images.loop;imageSummary.textContent=`${data.images.count} frame(s) loaded`;}else{imageSummary.textContent='0 frame(s) loaded';imageLoop.checked=false;}const isText=data?data.mode==='text':false;activateTextBtn.disabled=isText;activateImageBtn.disabled=data?data.mode==='image':false;if(!preservePreview){previewSourceImage=null;if(currentDeviceFrameHex){drawFramePreviewFromHex(currentDeviceFrameHex);}else{clearPreview();}}}\n");
+    page += F("function applyState(data,{preservePreview=false}={}){currentState=data||null;const brightnessPercent=currentState&&currentState.brightness?Number(currentState.brightness.percent):100;setBrightnessUI(brightnessPercent);currentDeviceFrameHex=currentState&&currentState.images?currentState.images.firstFrame||null:null;if(data&&data.text){textInput.value=data.text.value||'';textMode.value=data.text.animation||'hold';textFrame.value=data.text.frameDuration;}else{textInput.value='';textMode.value='hold';}if(data&&data.images){imageFrame.value=data.images.frameDuration;imageLoop.checked=!!data.images.loop;imageSummary.textContent=`${data.images.count} frame(s) loaded`;}else{imageSummary.textContent='0 frame(s) loaded';imageLoop.checked=false;}const isText=data?data.mode==='text':false;activateTextBtn.disabled=isText;activateImageBtn.disabled=data?data.mode==='image':false;if(!preservePreview){previewSourceImage=null;if(currentDeviceFrameHex){drawFramePreviewFromHex(currentDeviceFrameHex);}else{clearPreview();}}}\n");
     page += F("async function updatePreviewImage(){if(!previewSourceImage){if(currentDeviceFrameHex){drawFramePreviewFromHex(currentDeviceFrameHex);}else{clearPreview();}return;}const threshold=Number(imageThreshold.value);const invert=imageInvert.checked;const frame=imageToFrameData(previewSourceImage,threshold,invert);drawPreview(frame.pixels);previewHint.textContent='Preview shows local conversion (not yet uploaded).';}\n");
     page += F("async function handleFileSelection(){if(!imageFiles.files.length){previewSourceImage=null;if(currentDeviceFrameHex){drawFramePreviewFromHex(currentDeviceFrameHex);}else{clearPreview();}return;}try{previewSourceImage=await loadImageFromFile(imageFiles.files[0]);updatePreviewImage();}catch(err){console.error(err);showStatus('Preview failed',true);}}\n");
     page += F("async function refreshState(){try{const res=await fetch('/api/state');if(!res.ok)throw new Error('state load failed');const data=await res.json();const preservePreview=previewSourceImage!==null||imageFiles.files.length>0;applyState(data,{preservePreview});}catch(err){console.error(err);showStatus('Failed to refresh state',true);}}\n");
@@ -229,7 +293,7 @@ String buildHtml()
     page += F("textForm.addEventListener('submit',async e=>{e.preventDefault();try{const params=new URLSearchParams();params.set('text',textInput.value);params.set('mode',textMode.value);params.set('frameDuration',textFrame.value||'0');const res=await fetch('/api/text',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params});const data=await res.json();if(!res.ok||!data.ok)throw new Error(data.message||'Update failed');showStatus(data.message);refreshState();}catch(err){console.error(err);showStatus(err.message||'Update failed',true);}});\n");
     page += F("activateTextBtn.addEventListener('click',async ()=>{const params=new URLSearchParams();params.set('mode','text');const res=await fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params});const data=await res.json();if(!res.ok||!data.ok){showStatus(data.message||'Mode change failed',true);}else{showStatus(data.message);refreshState();}});\n");
     page += F("activateImageBtn.addEventListener('click',async ()=>{const params=new URLSearchParams();params.set('mode','image');const res=await fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params});const data=await res.json();if(!res.ok||!data.ok){showStatus(data.message||'Mode change failed',true);}else{showStatus(data.message);refreshState();}});\n");
-    page += F("imageFiles.addEventListener('change',handleFileSelection);imageThreshold.addEventListener('input',()=>{updateThresholdLabel();updatePreviewImage();});imageInvert.addEventListener('change',updatePreviewImage);\n");
+    page += F("brightnessRange.addEventListener('input',()=>{updateBrightnessLabel();scheduleBrightnessUpdate(false);});brightnessRange.addEventListener('change',()=>{updateBrightnessLabel();scheduleBrightnessUpdate(true);});imageFiles.addEventListener('change',handleFileSelection);imageThreshold.addEventListener('input',()=>{updateThresholdLabel();updatePreviewImage();});imageInvert.addEventListener('change',updatePreviewImage);\n");
     page += F("updateThresholdLabel();\n");
     page += F("applyState(initialState,{preservePreview:false});\n");
     page += F("refreshState();</script></body></html>");
@@ -246,11 +310,16 @@ void sendJsonResponse(int code, bool ok, const String& message)
     payload += jsonEscape(std::string(message.c_str()));
     payload += F("\"}");
     httpServer.send(code, "application/json", payload);
+    Serial.print(F("[Web] JSON response: "));
+    Serial.println(payload);
 }
 
 void sendStateJson()
 {
-    httpServer.send(200, "application/json", buildStateJsonPayload());
+    String payload = buildStateJsonPayload();
+    httpServer.send(200, "application/json", payload);
+    Serial.print(F("[Web] JSON response: "));
+    Serial.println(payload);
 }
 
 void applyDisplayMode(DisplayMode mode)
@@ -362,8 +431,14 @@ void handleApiImages()
         start = comma + 1;
     }
 
-    if (!newFrames.empty())
-        gAnimatedImage->setFrames(imageFrames);
+    if (newFrames.empty())
+    {
+        sendJsonResponse(400, false, F("No valid frames provided"));
+        return;
+    }
+
+    imageFrames = std::move(newFrames);
+    gAnimatedImage->setFrames(imageFrames);
 
     if (httpServer.hasArg("frameDuration"))
     {
@@ -383,6 +458,44 @@ void handleApiImages()
 
     gAnimatedImage->reset();
     sendJsonResponse(200, true, F("Image sequence updated"));
+}
+
+void handleApiBrightness()
+{
+    if (!httpServer.hasArg("value"))
+    {
+        sendJsonResponse(400, false, F("Missing value parameter"));
+        return;
+    }
+
+    float percent = httpServer.arg("value").toFloat();
+    if (percent < 0.0f)
+        percent = 0.0f;
+    if (percent > 100.0f)
+        percent = 100.0f;
+
+    updateBrightnessFromPercent(static_cast<uint8_t>(percent + 0.5f));
+
+    String message = F("Brightness set to ");
+    message += String(static_cast<int>(gBrightnessPercent));
+    message += F("%");
+
+    String payload;
+    payload.reserve(128);
+    payload += F("{\"ok\":true,\"message\":\"");
+    payload += jsonEscape(std::string(message.c_str()));
+    payload += F("\",\"brightness\":{");
+    payload += F("\"percent\":");
+    payload += String(static_cast<int>(gBrightnessPercent));
+    payload += F(",\"duty\":");
+    payload += String(static_cast<float>(gBrightnessDuty) / static_cast<float>(kBrightnessFixedScale), 4);
+    payload += F(",\"scale\":");
+    payload += String(kBrightnessFixedScale);
+    payload += F("}}");
+
+    httpServer.send(200, "application/json", payload);
+    Serial.print(F("[Web] JSON response: "));
+    Serial.println(payload);
 }
 
 void handleApiMode()
@@ -422,6 +535,8 @@ void WebInterface_begin(AnimatedText& animatedText,
 {
     gAnimatedText  = &animatedText;
     gAnimatedImage = &animatedImage;
+
+    updateBrightnessFromPercent(gBrightnessPercent);
 
     imageFrames.clear();
 
@@ -463,6 +578,7 @@ void WebInterface_begin(AnimatedText& animatedText,
     httpServer.on("/api/state", HTTP_GET, handleApiState);
     httpServer.on("/api/text", HTTP_POST, handleApiText);
     httpServer.on("/api/images", HTTP_POST, handleApiImages);
+    httpServer.on("/api/brightness", HTTP_POST, handleApiBrightness);
     httpServer.on("/api/mode", HTTP_POST, handleApiMode);
     httpServer.onNotFound(handleNotFound);
     httpServer.begin();
@@ -486,6 +602,16 @@ void WebInterface_handle()
 DisplayMode WebInterface_getDisplayMode()
 {
     return gDisplayMode;
+}
+
+uint16_t WebInterface_getBrightnessDuty()
+{
+    return gBrightnessDuty;
+}
+
+uint16_t WebInterface_getBrightnessScale()
+{
+    return kBrightnessFixedScale;
 }
 
 

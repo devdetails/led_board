@@ -4,6 +4,8 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
+#include <esp32-hal-timer.h>
 
 #include "Matrix16x16.h"
 #include "AnimatedText.h"
@@ -18,9 +20,31 @@ AnimatedText       animatedText;
 AnimatedImage      animatedImage;
 ShiftRegisterChain shiftChain;
 
+namespace
+{
+    hw_timer_t*       gWaitTimer      = nullptr;
+    SemaphoreHandle_t gTimerSemaphore = nullptr;
+    portMUX_TYPE      gTimerMux       = portMUX_INITIALIZER_UNLOCKED;
+
+    void IRAM_ATTR waitTimerISR()
+    {
+        BaseType_t higherPriorityTaskWoken = pdFALSE;
+        if (gTimerSemaphore != nullptr)
+        {
+            xSemaphoreGiveFromISR(gTimerSemaphore, &higherPriorityTaskWoken);
+        }
+        if (higherPriorityTaskWoken == pdTRUE)
+        {
+            portYIELD_FROM_ISR();
+        }
+    }
+}
+
 static struct FrameData
 {
     Matrix16x16 matrix;
+    uint16_t    brightnessDuty  = 0;
+    uint16_t    brightnessScale = 0;
 } frameData;
 
 portMUX_TYPE frameDataLock = portMUX_INITIALIZER_UNLOCKED;
@@ -34,31 +58,125 @@ constexpr BaseType_t kDisplayTaskCore = tskNO_AFFINITY;
 constexpr BaseType_t kWebTaskCore     = tskNO_AFFINITY;
 #endif
 
+static void waitWithHardwareTimer(uint32_t microseconds)
+{
+    if (microseconds == 0)
+        return;
+
+    if (gTimerSemaphore == nullptr)
+    {
+        gTimerSemaphore = xSemaphoreCreateBinary();
+        configASSERT(gTimerSemaphore != nullptr);
+    }
+
+    if (gWaitTimer == nullptr)
+    {
+        constexpr uint32_t kTimerFrequencyHz = 1'000'000; // 1 tick per microsecond
+        gWaitTimer = timerBegin(kTimerFrequencyHz);
+        timerAttachInterrupt(gWaitTimer, &waitTimerISR);
+    }
+
+    // ensure semaphore starts in the empty state before arming the timer
+    xSemaphoreTake(gTimerSemaphore, 0);
+
+    portENTER_CRITICAL(&gTimerMux);
+    timerStop(gWaitTimer);
+    timerWrite(gWaitTimer, 0);
+    timerAlarm(gWaitTimer, microseconds, false, 0);
+    timerStart(gWaitTimer);
+    portEXIT_CRITICAL(&gTimerMux);
+
+    // block until the hardware timer fires
+    xSemaphoreTake(gTimerSemaphore, portMAX_DELAY);
+}
+
 void displayTask(void* param)
 {
     (void)param;
+
     int row = 0;
-    const TickType_t delayTicks = pdMS_TO_TICKS(1);
+    constexpr uint32_t kRowPeriodUs = 520; // 16 rows x 520us ~= 8 ms per frame (~120 Hz refresh)
 
     FrameData displayFrame;
+    portENTER_CRITICAL(&frameDataLock);
+    displayFrame = frameData;
+    portEXIT_CRITICAL(&frameDataLock);
+
+    uint32_t brightnessScale = displayFrame.brightnessScale;
+    uint16_t brightnessDuty  = displayFrame.brightnessDuty;
+    uint32_t rowOnTimeUs     = 0;
+    uint32_t rowOffTimeUs    = kRowPeriodUs;
+
+    auto updateBrightnessTiming = [&]() 
+    {
+        // zero brightness
+        if (brightnessScale == 0 || brightnessDuty == 0)
+        {
+            rowOnTimeUs  = 0;
+            rowOffTimeUs = kRowPeriodUs;
+            return;
+        }
+
+        // full brightness
+        if (brightnessDuty >= brightnessScale)
+        {
+            rowOnTimeUs  = kRowPeriodUs;
+            rowOffTimeUs = 0;
+            return;
+        }
+
+        rowOnTimeUs = static_cast<uint32_t>((static_cast<uint64_t>(kRowPeriodUs) * brightnessDuty) / brightnessScale);
+        if (rowOnTimeUs >= kRowPeriodUs)
+        {
+            rowOnTimeUs  = kRowPeriodUs;
+            rowOffTimeUs = 0;
+        }
+        else
+        {
+            rowOffTimeUs = kRowPeriodUs - rowOnTimeUs;
+        }
+    };
+
+    updateBrightnessTiming();
 
     for (;;)
     {
         // sync latest frame data with web task thread
         if (row == 0)
         {
+            vTaskDelay(pdMS_TO_TICKS(1));
+
             portENTER_CRITICAL(&frameDataLock);
             displayFrame = frameData;
             portEXIT_CRITICAL(&frameDataLock);
+
+            brightnessScale = displayFrame.brightnessScale;
+            brightnessDuty  = displayFrame.brightnessDuty;
+
+            updateBrightnessTiming();
         }
 
-        // render current row
-        uint32_t word = displayFrame.matrix.composeRowWord(row);
-        shiftChain.writeWord(word);
+        // render current row with per-row PWM timing
+        const uint32_t rowWord = displayFrame.matrix.composeRowWord(row);
+
+        uint32_t offDelayUs = rowOffTimeUs;
+        if (rowOnTimeUs == 0)
+        {
+            offDelayUs = kRowPeriodUs;
+        }
+        else
+        {
+            shiftChain.writeWord(rowWord);
+            waitWithHardwareTimer(rowOnTimeUs);
+        }
+
+        shiftChain.writeWord(~0u);
+        if (offDelayUs > 0)
+        {
+            waitWithHardwareTimer(offDelayUs);
+        }
 
         row = (row + 1) % LED_MATRIX_ROWS;
-
-        vTaskDelay(delayTicks);
     }
 }
 
@@ -82,11 +200,16 @@ void webTask(void* param)
             frameMatrix = animatedImage.update(now);
         }
 
+        uint16_t latestBrightnessDuty  = WebInterface_getBrightnessDuty();
+        uint16_t latestBrightnessScale = WebInterface_getBrightnessScale();
+
         portENTER_CRITICAL(&frameDataLock);
-        frameData.matrix = frameMatrix;
+        frameData.matrix          = frameMatrix;
+        frameData.brightnessDuty  = latestBrightnessDuty;
+        frameData.brightnessScale = latestBrightnessScale;
         portEXIT_CRITICAL(&frameDataLock);
         
-        vTaskDelay(1);
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
@@ -105,7 +228,14 @@ void setup()
                        WIFI_PASSWORD,
                        WIFI_HOSTNAME);
 
-    animatedText.update(millis());
+    uint32_t now = millis();
+    Matrix16x16 initialMatrix = animatedText.update(now);
+
+    portENTER_CRITICAL(&frameDataLock);
+    frameData.matrix          = initialMatrix;
+    frameData.brightnessDuty  = WebInterface_getBrightnessDuty();
+    frameData.brightnessScale = WebInterface_getBrightnessScale();
+    portEXIT_CRITICAL(&frameDataLock);
 
     BaseType_t displayResult = xTaskCreatePinnedToCore(displayTask,
                                                        "displayTask",
