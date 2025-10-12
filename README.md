@@ -35,10 +35,10 @@ Default pins (override via `platformio.ini` build flags or `src/ShiftRegisterCha
 
 | Signal | [ESP32-C6 supermini](https://www.espboards.dev/esp32/esp32-c6-super-mini/) | LED board | Notes |
 | -------------- | ----------- | ----- |-------------------------------------------------------------------- |
-| `SR_PIN_DATA`  | 1           | IN    | 595 SER input                                                       |
-| `SR_PIN_CLK`   | 3           | CLK   | 595 SRCLK                                                           |
-| `SR_PIN_LATCH` | 2           | STB   | 595 RCLK                                                            |
-| `SR_PIN_OE`    | 0           | OE    | NOTE: not connected on the board                                    |
+| `SR_PIN_OE`    | GP0         | OE    | NOTE: not connected on the board                                    |
+| `SR_PIN_DATA`  | GP1         | IN    | 595 SER input                                                       |
+| `SR_PIN_LATCH` | GP2         | STB   | 595 RCLK                                                            |
+| `SR_PIN_CLK`   | GP3         | CLK   | 595 SRCLK                                                           |
 | 5V VCC         | 5V          | VCC   | Board is powered by 5V but 74HC595 can live with 3.3V logic levels  |
 | GND            | GND         | GND   | Ground                                                              |
 
