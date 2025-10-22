@@ -4,7 +4,7 @@
 
 // hardware related stuff
 constexpr int      PIN_SR_DATA  = 1;
-constexpr int      PIN_SR_CLK   = 3;
+constexpr int      PIN_SR_CLK   = 4;
 constexpr int      PIN_SR_LATCH = 2;
 constexpr int      PIN_SR_OE    = 0;
 

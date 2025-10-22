@@ -9,11 +9,13 @@ void ShiftRegisterChain::begin()
 
     gBackend->gpio.pinMode(latchPin, OUTPUT);
     gBackend->gpio.pinMode(oePin, OUTPUT);
-    enableOutput(true);
+    gBackend->gpio.digitalWrite(oePin, HIGH);
     gBackend->gpio.digitalWrite(latchPin, HIGH);
 
     gBackend->spi.begin(clockPin, -1, dataPin, -1);
     spiInitialized = true;
+
+    writeWord(~0);
 }
 
 void ShiftRegisterChain::enableOutput(bool enable)

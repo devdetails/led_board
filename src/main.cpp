@@ -2,6 +2,9 @@
 #include "config.h"
 #include "secrets.h"
 
+#include <WiFi.h>
+#include <ArduinoOTA.h>
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
@@ -186,6 +189,7 @@ void webTask(void* param)
     for (;;)
     {
         WebInterface_handle();
+        ArduinoOTA.handle();
 
         const uint32_t now = millis();
         const DisplayMode mode = WebInterface_getDisplayMode();
@@ -217,10 +221,10 @@ void setup()
 {
     gBackend = &backend;
 
+    shiftChain.begin();
+
     Serial.begin(115200);
     delay(500);
-
-    shiftChain.begin();
 
     WebInterface_begin(animatedText,
                        animatedImage,
@@ -228,7 +232,55 @@ void setup()
                        WIFI_PASSWORD,
                        WIFI_HOSTNAME);
 
-    uint32_t now = millis();
+    ArduinoOTA.setHostname(WIFI_HOSTNAME);
+    ArduinoOTA.onStart([]() 
+        {
+            const bool updatingSketch = (ArduinoOTA.getCommand() == U_FLASH);
+            Serial.println();
+            Serial.print(F("[OTA] Start updating "));
+            Serial.println(updatingSketch ? F("sketch") : F("filesystem"));
+        });
+
+    ArduinoOTA.onEnd([]() 
+        {
+            Serial.println();
+            Serial.println(F("[OTA] Update finished"));
+        });
+
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) 
+        {
+            const unsigned int percent = (total > 0) ? (progress * 100u / total) : 0u;
+            Serial.printf("[OTA] Progress: %u%%\r", percent);
+        });
+
+    ArduinoOTA.onError([](ota_error_t error) 
+        {
+            Serial.printf("[OTA] Error[%u]: ", error);
+            switch (error)
+            {
+                case OTA_AUTH_ERROR:    Serial.println(F("Auth failed")); break;
+                case OTA_BEGIN_ERROR:   Serial.println(F("Begin failed")); break;
+                case OTA_CONNECT_ERROR: Serial.println(F("Connect failed")); break;
+                case OTA_RECEIVE_ERROR: Serial.println(F("Receive failed")); break;
+                case OTA_END_ERROR:     Serial.println(F("End failed")); break;
+                default:                Serial.println(F("Unknown error")); break;
+            }
+        });
+
+    ArduinoOTA.begin();
+    Serial.println(F("[OTA] Ready for updates"));
+
+    if (WiFi.isConnected())
+    {
+        Serial.print(F("[OTA] Device reachable at http://"));
+        Serial.println(WiFi.localIP());
+    }
+    else
+    {
+        Serial.println(F("[OTA] Waiting for WiFi connection to announce OTA service"));
+    }
+
+    uint32_t    now           = millis();
     Matrix16x16 initialMatrix = animatedText.update(now);
 
     portENTER_CRITICAL(&frameDataLock);
