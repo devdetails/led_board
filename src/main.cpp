@@ -52,6 +52,18 @@ static struct FrameData
 
 portMUX_TYPE frameDataLock = portMUX_INITIALIZER_UNLOCKED;
 
+static void updateFrameData(const Matrix16x16& newFrame)
+{
+    const uint16_t brightnessDuty  = WebInterface_getBrightnessDuty();
+    const uint16_t brightnessScale = WebInterface_getBrightnessScale();
+
+    portENTER_CRITICAL(&frameDataLock);
+    frameData.matrix          = newFrame;
+    frameData.brightnessDuty  = brightnessDuty;
+    frameData.brightnessScale = brightnessScale;
+    portEXIT_CRITICAL(&frameDataLock);
+}
+
 // pin display- and webserver tasks to different cores chips with more than one core
 #if defined(portNUM_PROCESSORS) && (portNUM_PROCESSORS > 1)
 constexpr BaseType_t kDisplayTaskCore = 1;
@@ -226,11 +238,84 @@ void setup()
     Serial.begin(115200);
     delay(500);
 
+    animatedText.setAnimationMode(AnimatedText::AnimationMode::Scroll);
+    animatedText.setLooping(true);
+    animatedText.setText("Connecting... ");
+    updateFrameData(animatedText.update(millis()));
+
+    BaseType_t displayResult = xTaskCreatePinnedToCore(displayTask,
+                                                       "displayTask",
+                                                       4096,
+                                                       nullptr,
+                                                       2,
+                                                       nullptr,
+                                                       kDisplayTaskCore);
+
+    constexpr uint32_t kConnectTimeoutMs      = 20000;
+    constexpr uint32_t kDisplayUpdateInterval = 40;
+    constexpr uint32_t kSerialDotInterval     = 500;
+
+    const bool wifiCredentialsPresent = (WIFI_SSID != nullptr && WIFI_SSID[0] != '\0');
+    bool       wifiConnected          = false;
+
+    if (wifiCredentialsPresent)
+    {
+        WiFi.mode(WIFI_STA);
+        WiFi.setAutoReconnect(true);
+
+        if (WIFI_HOSTNAME != nullptr && WIFI_HOSTNAME[0] != '\0')
+        {
+            WiFi.setHostname(WIFI_HOSTNAME);
+        }
+
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD != nullptr ? WIFI_PASSWORD : "");
+        updateFrameData(animatedText.update(millis()));
+
+        Serial.print(F("Connecting to WiFi"));
+
+        uint32_t connectStart = millis();
+        uint32_t lastDot      = connectStart;
+
+        while (WiFi.status() != WL_CONNECTED && (millis() - connectStart) < kConnectTimeoutMs)
+        {
+            const uint32_t now = millis();
+
+            if (now - lastDot >= kSerialDotInterval)
+            {
+                Serial.print('.');
+                lastDot = now;
+            }
+
+            updateFrameData(animatedText.update(now));
+            delay(kDisplayUpdateInterval);
+        }
+
+        Serial.println();
+        updateFrameData(animatedText.update(millis()));
+
+        wifiConnected = (WiFi.status() == WL_CONNECTED);
+        if (wifiConnected)
+        {
+            Serial.print(F("Connected. IP address: "));
+            Serial.println(WiFi.localIP());
+        }
+        else
+        {
+            Serial.println(F("WiFi connection failed (continuing offline)."));
+        }
+    }
+    else
+    {
+        Serial.println(F("WiFi SSID not provided; running without network."));
+    }
+
     WebInterface_begin(animatedText,
                        animatedImage,
                        WIFI_SSID,
                        WIFI_PASSWORD,
                        WIFI_HOSTNAME);
+
+    updateFrameData(animatedText.update(millis()));
 
     ArduinoOTA.setHostname(WIFI_HOSTNAME);
     ArduinoOTA.onStart([]() 
@@ -280,22 +365,23 @@ void setup()
         Serial.println(F("[OTA] Waiting for WiFi connection to announce OTA service"));
     }
 
-    uint32_t    now           = millis();
-    Matrix16x16 initialMatrix = animatedText.update(now);
+    if (wifiConnected && WiFi.isConnected())
+    {
+        const String ipString = WiFi.localIP().toString();
+        std::string message   = "IP: ";
+        message += ipString.c_str();
+        message += ' ';
+        animatedText.setText(message);
+    }
+    else
+    {
+        animatedText.setText("Offline ");
+    }
+    animatedText.setAnimationMode(AnimatedText::AnimationMode::Scroll);
+    animatedText.setLooping(true);
+    updateFrameData(animatedText.update(millis()));
 
-    portENTER_CRITICAL(&frameDataLock);
-    frameData.matrix          = initialMatrix;
-    frameData.brightnessDuty  = WebInterface_getBrightnessDuty();
-    frameData.brightnessScale = WebInterface_getBrightnessScale();
-    portEXIT_CRITICAL(&frameDataLock);
 
-    BaseType_t displayResult = xTaskCreatePinnedToCore(displayTask,
-                                                       "displayTask",
-                                                       4096,
-                                                       nullptr,
-                                                       2,
-                                                       nullptr,
-                                                       kDisplayTaskCore);
     BaseType_t webResult = xTaskCreatePinnedToCore(webTask,
                                                    "webTask",
                                                    8192,
@@ -303,7 +389,6 @@ void setup()
                                                    1,
                                                    nullptr,
                                                    kWebTaskCore);
-
 
     configASSERT(displayResult == pdPASS);
     configASSERT(webResult     == pdPASS);

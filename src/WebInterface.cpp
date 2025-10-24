@@ -537,42 +537,9 @@ void WebInterface_begin(AnimatedText& animatedText,
     gAnimatedImage = &animatedImage;
 
     updateBrightnessFromPercent(gBrightnessPercent);
-
+    
     imageFrames.clear();
 
-    WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
-
-    if (wifiHostname != nullptr && wifiHostname[0] != '\0')
-    {
-        WiFi.setHostname(wifiHostname);
-    }
-
-    if (wifiSsid != nullptr && wifiSsid[0] != '\0')
-    {
-        WiFi.begin(wifiSsid, wifiPassword != nullptr ? wifiPassword : "");
-        Serial.print(F("Connecting to WiFi"));
-        uint32_t startAttempt = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 20000)
-        {
-            Serial.print('.');
-            delay(500);
-        }
-        Serial.println();
-        if (WiFi.status() == WL_CONNECTED)
-        {
-            Serial.print(F("Connected. IP address: "));
-            Serial.println(WiFi.localIP());
-        }
-        else
-        {
-            Serial.println(F("WiFi connection failed (continuing offline)."));
-        }
-    }
-    else
-    {
-        Serial.println(F("WiFi SSID not provided; running without network."));
-    }
 
     httpServer.on("/", handleRoot);
     httpServer.on("/api/state", HTTP_GET, handleApiState);
