@@ -21,6 +21,7 @@ public:
     uint32_t composeRowWord(int row) const;
 
     void copyFrom(const Matrix16x16& other);
+    void merge(const Matrix16x16& other);
 
 private:
     std::array<uint16_t, LED_MATRIX_ROWS> rows{};

@@ -69,6 +69,20 @@ bool AnimatedText::isLooping() const
     return looping;
 }
 
+void AnimatedText::setVerticalAlignment(VerticalAlignment alignment)
+{
+    if (verticalAlignment == alignment)
+        return;
+
+    verticalAlignment = alignment;
+    reset();
+}
+
+AnimatedText::VerticalAlignment AnimatedText::getVerticalAlignment() const
+{
+    return verticalAlignment;
+}
+
 void AnimatedText::reset()
 {
     nextIndex          =  0;
@@ -183,6 +197,8 @@ void AnimatedText::updateScroll(uint32_t nowMs)
     if (!looping && displayedIndex == -1 && nextIndex >= message.size())
         return;
 
+    const int glyphWidth = glyphPixelWidth();
+
     if (displayedIndex == -1)
     {
         displayedIndex = 0;
@@ -196,14 +212,7 @@ void AnimatedText::updateScroll(uint32_t nowMs)
         }
         scrollOffset = 0;
 
-        char current = message[displayedIndex];
-        char next = ' ';
-        if (nextIndex < message.size())
-            next = message[nextIndex];
-        else if (looping && !message.empty())
-            next = message[0];
-
-        drawScrollFrame(current, next, scrollOffset);
+        drawScrollFrame(scrollOffset);
         lastFrameTimestamp = nowMs;
         return;
     }
@@ -214,7 +223,7 @@ void AnimatedText::updateScroll(uint32_t nowMs)
     lastFrameTimestamp = nowMs;
     scrollOffset += 1;
 
-    if (scrollOffset >= 16)
+    if (scrollOffset >= glyphWidth)
     {
         scrollOffset = 0;
 
@@ -243,18 +252,17 @@ void AnimatedText::updateScroll(uint32_t nowMs)
         }
     }
 
-    char current = (displayedIndex >= 0) ? message[displayedIndex] : ' ';
-    char next = ' ';
-    if (nextIndex < message.size())
-        next = message[nextIndex];
-    else if (looping && !message.empty())
-        next = message[0];
-
-    drawScrollFrame(current, next, scrollOffset);
+    drawScrollFrame(scrollOffset);
 }
 
 void AnimatedText::drawGlyphAtOffset(const uint8_t* glyph, int offsetX)
 {
+    const int horizontalScale = this->horizontalScale();
+    const int verticalScale   = this->verticalScale();
+    const int verticalOffset  = (verticalAlignment == VerticalAlignment::LowerHalf)
+                                    ? (LED_MATRIX_ROWS - 8 * verticalScale)
+                                    : 0;
+
     for (int row = 0; row < 8; ++row)
     {
         for (int col = 0; col < 8; ++col)
@@ -262,27 +270,77 @@ void AnimatedText::drawGlyphAtOffset(const uint8_t* glyph, int offsetX)
             if (!glyphPixelOn(glyph, col, row))
                 continue;
 
-            int baseX = offsetX + col * 2;
-            int baseY = row * 2;
+            const int baseX = offsetX + col * horizontalScale;
+            const int baseY = verticalOffset + row * verticalScale;
 
-            matrix.setPixel(baseX,     baseY,     true);
-            matrix.setPixel(baseX + 1, baseY,     true);
-            matrix.setPixel(baseX,     baseY + 1, true);
-            matrix.setPixel(baseX + 1, baseY + 1, true);
+            for (int dy = 0; dy < verticalScale; ++dy)
+            {
+                for (int dx = 0; dx < horizontalScale; ++dx)
+                {
+                    matrix.setPixel(baseX + dx, baseY + dy, true);
+                }
+            }
         }
     }
 }
 
-void AnimatedText::drawScrollFrame(char current, char next, int offset)
+void AnimatedText::drawScrollFrame(int offset)
 {
     matrix.clear();
-    drawGlyphAtOffset(font8x8_basic[static_cast<uint8_t>(current)], -offset);
-    drawGlyphAtOffset(font8x8_basic[static_cast<uint8_t>(next)], 16 - offset);
+
+    if (message.empty() || displayedIndex < 0)
+        return;
+
+    const int glyphWidth = glyphPixelWidth();
+    int       drawX      = -offset;
+
+    size_t glyphIndex = static_cast<size_t>(displayedIndex);
+    char   current    = message[glyphIndex];
+    bool   hasGlyphs  = true;
+
+    while (drawX < LED_MATRIX_COLS)
+    {
+        drawGlyphAtOffset(font8x8_basic[static_cast<uint8_t>(current)], drawX);
+        drawX += glyphWidth;
+
+        if (!hasGlyphs)
+            continue;
+
+        size_t nextGlyph = glyphIndex + 1;
+        if (nextGlyph >= message.size())
+        {
+            if (!looping)
+            {
+                hasGlyphs = false;
+                current   = ' ';
+                continue;
+            }
+            nextGlyph = 0;
+        }
+
+        glyphIndex = nextGlyph;
+        current    = message[glyphIndex];
+    }
 }
 
 void AnimatedText::drawCharacter(char c)
 {
     matrix.clear();
     drawGlyphAtOffset(font8x8_basic[static_cast<uint8_t>(c)], 0);
+}
+
+int AnimatedText::horizontalScale() const
+{
+    return (verticalAlignment == VerticalAlignment::Full) ? 2 : 1;
+}
+
+int AnimatedText::verticalScale() const
+{
+    return (verticalAlignment == VerticalAlignment::Full) ? 2 : 1;
+}
+
+int AnimatedText::glyphPixelWidth() const
+{
+    return horizontalScale() * 8;
 }
 

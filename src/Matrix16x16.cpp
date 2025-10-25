@@ -1,4 +1,5 @@
 ﻿#include "Matrix16x16.h"
+#include <cstddef>
 
 void Matrix16x16::clear()
 {
@@ -80,3 +81,13 @@ void Matrix16x16::copyFrom(const Matrix16x16& other)
 {
     rows = other.rows;
 }
+
+void Matrix16x16::merge(const Matrix16x16& other)
+{
+    for (std::size_t i = 0; i < rows.size(); ++i)
+    {
+        rows[i] |= other.rows[i];
+    }
+}
+
+

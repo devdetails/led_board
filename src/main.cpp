@@ -19,7 +19,8 @@
 Backend* gBackend = nullptr;
 
 Backend            backend;
-AnimatedText       animatedText;
+AnimatedText       animatedTextTop;
+AnimatedText       animatedTextBottom;
 AnimatedImage      animatedImage;
 ShiftRegisterChain shiftChain;
 
@@ -64,6 +65,51 @@ static void updateFrameData(const Matrix16x16& newFrame)
     portEXIT_CRITICAL(&frameDataLock);
 }
 
+static Matrix16x16 composeTextFrame(uint32_t nowMs)
+{
+    const TextLayout layout = WebInterface_getTextLayout();
+    static TextLayout appliedLayout = TextLayout::Dual;
+
+    if (layout != appliedLayout)
+    {
+        switch (layout)
+        {
+            case TextLayout::Dual:
+                animatedTextTop.setVerticalAlignment(AnimatedText::VerticalAlignment::UpperHalf);
+                animatedTextBottom.setVerticalAlignment(AnimatedText::VerticalAlignment::LowerHalf);
+                break;
+            case TextLayout::SingleTop:
+                animatedTextTop.setVerticalAlignment(AnimatedText::VerticalAlignment::Full);
+                animatedTextBottom.setVerticalAlignment(AnimatedText::VerticalAlignment::LowerHalf);
+                break;
+            case TextLayout::SingleBottom:
+                animatedTextTop.setVerticalAlignment(AnimatedText::VerticalAlignment::UpperHalf);
+                animatedTextBottom.setVerticalAlignment(AnimatedText::VerticalAlignment::Full);
+                break;
+            default:
+                break;
+        }
+        appliedLayout = layout;
+    }
+
+    Matrix16x16 topFrame    = animatedTextTop.update(nowMs);
+    Matrix16x16 bottomFrame = animatedTextBottom.update(nowMs);
+
+    switch (layout)
+    {
+        case TextLayout::Dual:
+            topFrame.merge(bottomFrame);
+            return topFrame;
+        case TextLayout::SingleTop:
+            return topFrame;
+        case TextLayout::SingleBottom:
+            return bottomFrame;
+        default:
+            topFrame.merge(bottomFrame);
+            return topFrame;
+    }
+}
+
 // pin display- and webserver tasks to different cores chips with more than one core
 #if defined(portNUM_PROCESSORS) && (portNUM_PROCESSORS > 1)
 constexpr BaseType_t kDisplayTaskCore = 1;
@@ -86,18 +132,22 @@ static void waitWithHardwareTimer(uint32_t microseconds)
 
     if (gWaitTimer == nullptr)
     {
-        constexpr uint32_t kTimerFrequencyHz = 1'000'000; // 1 tick per microsecond
-        gWaitTimer = timerBegin(kTimerFrequencyHz);
-        timerAttachInterrupt(gWaitTimer, &waitTimerISR);
+        constexpr uint8_t  kTimerNumber   = 0;
+        constexpr uint16_t kTimerDivider  = 80; // 80 MHz / 80 = 1 tick per microsecond
+        gWaitTimer = timerBegin(kTimerNumber, kTimerDivider, true);
+        configASSERT(gWaitTimer != nullptr);
+        timerAttachInterrupt(gWaitTimer, &waitTimerISR, true);
     }
 
     // ensure semaphore starts in the empty state before arming the timer
     xSemaphoreTake(gTimerSemaphore, 0);
 
     portENTER_CRITICAL(&gTimerMux);
+    timerAlarmDisable(gWaitTimer);
     timerStop(gWaitTimer);
     timerWrite(gWaitTimer, 0);
-    timerAlarm(gWaitTimer, microseconds, false, 0);
+    timerAlarmWrite(gWaitTimer, microseconds, false);
+    timerAlarmEnable(gWaitTimer);
     timerStart(gWaitTimer);
     portEXIT_CRITICAL(&gTimerMux);
 
@@ -209,7 +259,7 @@ void webTask(void* param)
         Matrix16x16 frameMatrix;
         if (mode == DisplayMode::Text)
         {
-            frameMatrix = animatedText.update(now);
+            frameMatrix = composeTextFrame(now);
         }
         else
         {
@@ -238,10 +288,18 @@ void setup()
     Serial.begin(115200);
     delay(500);
 
-    animatedText.setAnimationMode(AnimatedText::AnimationMode::Scroll);
-    animatedText.setLooping(true);
-    animatedText.setText("Connecting... ");
-    updateFrameData(animatedText.update(millis()));
+    animatedTextTop.setVerticalAlignment(AnimatedText::VerticalAlignment::UpperHalf);
+    animatedTextBottom.setVerticalAlignment(AnimatedText::VerticalAlignment::LowerHalf);
+
+    animatedTextTop.setAnimationMode(AnimatedText::AnimationMode::Scroll);
+    animatedTextTop.setLooping(true);
+    animatedTextTop.setText("Connecting ");
+
+    animatedTextBottom.setAnimationMode(AnimatedText::AnimationMode::Hold);
+    animatedTextBottom.setLooping(true);
+    animatedTextBottom.setText("...");
+
+    updateFrameData(composeTextFrame(millis()));
 
     BaseType_t displayResult = xTaskCreatePinnedToCore(displayTask,
                                                        "displayTask",
@@ -269,7 +327,7 @@ void setup()
         }
 
         WiFi.begin(WIFI_SSID, WIFI_PASSWORD != nullptr ? WIFI_PASSWORD : "");
-        updateFrameData(animatedText.update(millis()));
+        updateFrameData(composeTextFrame(millis()));
 
         Serial.print(F("Connecting to WiFi"));
 
@@ -286,12 +344,12 @@ void setup()
                 lastDot = now;
             }
 
-            updateFrameData(animatedText.update(now));
+            updateFrameData(composeTextFrame(now));
             delay(kDisplayUpdateInterval);
         }
 
         Serial.println();
-        updateFrameData(animatedText.update(millis()));
+        updateFrameData(composeTextFrame(millis()));
 
         wifiConnected = (WiFi.status() == WL_CONNECTED);
         if (wifiConnected)
@@ -309,13 +367,14 @@ void setup()
         Serial.println(F("WiFi SSID not provided; running without network."));
     }
 
-    WebInterface_begin(animatedText,
+    WebInterface_begin(animatedTextTop,
+                       animatedTextBottom,
                        animatedImage,
                        WIFI_SSID,
                        WIFI_PASSWORD,
                        WIFI_HOSTNAME);
 
-    updateFrameData(animatedText.update(millis()));
+    updateFrameData(composeTextFrame(millis()));
 
     ArduinoOTA.setHostname(WIFI_HOSTNAME);
     ArduinoOTA.onStart([]() 
@@ -365,21 +424,43 @@ void setup()
         Serial.println(F("[OTA] Waiting for WiFi connection to announce OTA service"));
     }
 
-    if (wifiConnected && WiFi.isConnected())
+    std::string topLine;
+    std::string bottomLine;
+
+    if (wifiCredentialsPresent)
     {
-        const String ipString = WiFi.localIP().toString();
-        std::string message   = "IP: ";
-        message += ipString.c_str();
-        message += ' ';
-        animatedText.setText(message);
+        const char* ssid = (WIFI_SSID != nullptr) ? WIFI_SSID : "";
+        topLine = "SSID: ";
+        topLine += ssid;
+        topLine += ' ';
+
+        if (wifiConnected && WiFi.isConnected())
+        {
+            const String ipString = WiFi.localIP().toString();
+            bottomLine = "IP: ";
+            bottomLine += ipString.c_str();
+            bottomLine += ' ';
+        }
+        else
+        {
+            bottomLine = "IP: offline ";
+        }
     }
     else
     {
-        animatedText.setText("Offline ");
+        topLine    = "SSID: <none> ";
+        bottomLine = "IP: offline ";
     }
-    animatedText.setAnimationMode(AnimatedText::AnimationMode::Scroll);
-    animatedText.setLooping(true);
-    updateFrameData(animatedText.update(millis()));
+
+    animatedTextTop.setAnimationMode(AnimatedText::AnimationMode::Scroll);
+    animatedTextTop.setLooping(true);
+    animatedTextTop.setText(topLine);
+
+    animatedTextBottom.setAnimationMode(AnimatedText::AnimationMode::Scroll);
+    animatedTextBottom.setLooping(true);
+    animatedTextBottom.setText(bottomLine);
+
+    updateFrameData(composeTextFrame(millis()));
 
 
     BaseType_t webResult = xTaskCreatePinnedToCore(webTask,
