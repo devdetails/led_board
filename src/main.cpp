@@ -86,18 +86,22 @@ static void waitWithHardwareTimer(uint32_t microseconds)
 
     if (gWaitTimer == nullptr)
     {
-        constexpr uint32_t kTimerFrequencyHz = 1'000'000; // 1 tick per microsecond
-        gWaitTimer = timerBegin(kTimerFrequencyHz);
-        timerAttachInterrupt(gWaitTimer, &waitTimerISR);
+        constexpr uint8_t  kTimerNumber   = 0;
+        constexpr uint16_t kTimerDivider  = 80; // 80 MHz / 80 = 1 tick per microsecond
+        gWaitTimer = timerBegin(kTimerNumber, kTimerDivider, true);
+        configASSERT(gWaitTimer != nullptr);
+        timerAttachInterrupt(gWaitTimer, &waitTimerISR, true);
     }
 
     // ensure semaphore starts in the empty state before arming the timer
     xSemaphoreTake(gTimerSemaphore, 0);
 
     portENTER_CRITICAL(&gTimerMux);
+    timerAlarmDisable(gWaitTimer);
     timerStop(gWaitTimer);
     timerWrite(gWaitTimer, 0);
-    timerAlarm(gWaitTimer, microseconds, false, 0);
+    timerAlarmWrite(gWaitTimer, microseconds, false);
+    timerAlarmEnable(gWaitTimer);
     timerStart(gWaitTimer);
     portEXIT_CRITICAL(&gTimerMux);
 
