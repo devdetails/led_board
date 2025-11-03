@@ -22,6 +22,7 @@ AnimatedText       animatedTextTop;
 AnimatedText       animatedTextBottom;
 AnimatedImage      animatedImage;
 ShiftRegisterChain shiftChain;
+WebInterface       webInterface(animatedTextTop, animatedTextBottom, animatedImage);
 
 namespace
 {
@@ -54,8 +55,8 @@ portMUX_TYPE frameDataLock = portMUX_INITIALIZER_UNLOCKED;
 
 static void updateFrameData(const Matrix16x16& newFrame)
 {
-    const uint16_t brightnessDuty  = WebInterface_getBrightnessDuty();
-    const uint16_t brightnessScale = WebInterface_getBrightnessScale();
+    const uint16_t brightnessDuty  = webInterface.getBrightnessDuty();
+    const uint16_t brightnessScale = webInterface.getBrightnessScale();
 
     portENTER_CRITICAL(&frameDataLock);
     frameData.matrix          = newFrame;
@@ -66,7 +67,7 @@ static void updateFrameData(const Matrix16x16& newFrame)
 
 static Matrix16x16 composeTextFrame(uint32_t nowMs)
 {
-    const TextLayout layout = WebInterface_getTextLayout();
+    const TextLayout layout = webInterface.getTextLayout();
     static TextLayout appliedLayout = TextLayout::Dual;
 
     if (layout != appliedLayout)
@@ -249,10 +250,10 @@ void webTask(void* param)
     (void)param;
     for (;;)
     {
-        WebInterface_handle();
+        webInterface.handle();
 
         const uint32_t now = millis();
-        const DisplayMode mode = WebInterface_getDisplayMode();
+        const DisplayMode mode = webInterface.getDisplayMode();
 
         Matrix16x16 frameMatrix;
         if (mode == DisplayMode::Text)
@@ -264,8 +265,8 @@ void webTask(void* param)
             frameMatrix = animatedImage.update(now);
         }
 
-        uint16_t latestBrightnessDuty  = WebInterface_getBrightnessDuty();
-        uint16_t latestBrightnessScale = WebInterface_getBrightnessScale();
+        uint16_t latestBrightnessDuty  = webInterface.getBrightnessDuty();
+        uint16_t latestBrightnessScale = webInterface.getBrightnessScale();
 
         portENTER_CRITICAL(&frameDataLock);
         frameData.matrix          = frameMatrix;
@@ -365,12 +366,7 @@ void setup()
         Serial.println(F("WiFi SSID not provided; running without network."));
     }
 
-    WebInterface_begin(animatedTextTop,
-                       animatedTextBottom,
-                       animatedImage,
-                       WIFI_SSID,
-                       WIFI_PASSWORD,
-                       WIFI_HOSTNAME);
+    webInterface.begin();
 
     updateFrameData(composeTextFrame(millis()));
 

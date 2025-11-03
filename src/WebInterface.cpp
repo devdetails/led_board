@@ -1,7 +1,7 @@
 #include "WebInterface.h"
 
 #include "config.h"
-#include <WebServer.h>
+
 #include <WiFi.h>
 
 #include <math.h>
@@ -11,32 +11,80 @@
 #include <utility>
 #include <vector>
 
-namespace
+WebInterface::WebInterface(AnimatedText& animatedTextTop,
+                           AnimatedText& animatedTextBottom,
+                           AnimatedImage& animatedImage)
+    : mAnimatedTextTop(animatedTextTop)
+    , mAnimatedTextBottom(animatedTextBottom)
+    , mAnimatedImage(animatedImage)
+    , mHttpServer(80)
+    , mDisplayMode(DisplayMode::Text)
+    , mTextLayout(TextLayout::Dual)
+    , mBrightnessDuty(kBrightnessFixedScale)
+    , mBrightnessPercent(100)
 {
-AnimatedText*   gAnimatedTextTop    = nullptr;
-AnimatedText*   gAnimatedTextBottom = nullptr;
-AnimatedImage*  gAnimatedImage      = nullptr;
-WebServer       httpServer(80);
+}
 
-DisplayMode        gDisplayMode = DisplayMode::Text;
-TextLayout         gTextLayout  = TextLayout::Dual;
-std::vector<Image> imageFrames;
+void WebInterface::begin()
+{
+    updateBrightnessFromPercent(mBrightnessPercent);
+    mImageFrames.clear();
 
-constexpr float        kBrightnessGamma      = 2.2f;
-constexpr uint16_t     kBrightnessFixedScale = 32;
-uint16_t               gBrightnessDuty       = kBrightnessFixedScale;
-uint8_t                gBrightnessPercent    = 100;
+    mHttpServer.on("/", [this]() { handleRoot(); });
+    mHttpServer.on("/api/state", HTTP_GET, [this]() { handleApiState(); });
+    mHttpServer.on("/api/text", HTTP_POST, [this]() { handleApiText(); });
+    mHttpServer.on("/api/images", HTTP_POST, [this]() { handleApiImages(); });
+    mHttpServer.on("/api/brightness", HTTP_POST, [this]() { handleApiBrightness(); });
+    mHttpServer.on("/api/mode", HTTP_POST, [this]() { handleApiMode(); });
+    mHttpServer.onNotFound([this]() { handleNotFound(); });
+    mHttpServer.begin();
 
-void updateBrightnessFromPercent(uint8_t percent)
+    Serial.print(F("HTTP server started. Open http://"));
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        Serial.println(WiFi.localIP());
+    }
+    else
+    {
+        Serial.println(F("device-local"));
+    }
+}
+
+void WebInterface::handle()
+{
+    mHttpServer.handleClient();
+}
+
+DisplayMode WebInterface::getDisplayMode() const
+{
+    return mDisplayMode;
+}
+
+TextLayout WebInterface::getTextLayout() const
+{
+    return mTextLayout;
+}
+
+uint16_t WebInterface::getBrightnessDuty() const
+{
+    return mBrightnessDuty;
+}
+
+uint16_t WebInterface::getBrightnessScale() const
+{
+    return kBrightnessFixedScale;
+}
+
+void WebInterface::updateBrightnessFromPercent(uint8_t percent)
 {
     if (percent > 100)
         percent = 100;
 
-    gBrightnessPercent = percent;
+    mBrightnessPercent = percent;
 
     if (percent == 0)
     {
-        gBrightnessDuty = 0;
+        mBrightnessDuty = 0;
         return;
     }
 
@@ -49,10 +97,10 @@ void updateBrightnessFromPercent(uint8_t percent)
     if (duty > kBrightnessFixedScale)
         duty = kBrightnessFixedScale;
 
-    gBrightnessDuty = duty;
+    mBrightnessDuty = duty;
 }
 
-String htmlEscape(const std::string& text)
+String WebInterface::htmlEscape(const std::string& text) const
 {
     String escaped;
     escaped.reserve(text.size() * 2 + 16);
@@ -73,7 +121,7 @@ String htmlEscape(const std::string& text)
     return escaped;
 }
 
-String jsonEscape(const std::string& text)
+String WebInterface::jsonEscape(const std::string& text) const
 {
     String escaped;
     escaped.reserve(text.size() * 2 + 16);
@@ -104,7 +152,7 @@ String jsonEscape(const std::string& text)
     return escaped;
 }
 
-AnimatedText::AnimationMode parseTextMode(const String& arg)
+AnimatedText::AnimationMode WebInterface::parseTextMode(const String& arg) const
 {
     if (arg.equalsIgnoreCase("scroll"))
     {
@@ -113,7 +161,7 @@ AnimatedText::AnimationMode parseTextMode(const String& arg)
     return AnimatedText::AnimationMode::Hold;
 }
 
-const char* textLayoutToString(TextLayout layout)
+const char* WebInterface::textLayoutToString(TextLayout layout) const
 {
     switch (layout)
     {
@@ -124,7 +172,7 @@ const char* textLayoutToString(TextLayout layout)
     }
 }
 
-TextLayout parseTextLayout(const String& arg)
+TextLayout WebInterface::parseTextLayout(const String& arg) const
 {
     if (arg.equalsIgnoreCase("single_top"))
         return TextLayout::SingleTop;
@@ -133,7 +181,7 @@ TextLayout parseTextLayout(const String& arg)
     return TextLayout::Dual;
 }
 
-bool decodeHexFrame(const String& hex, Image& out)
+bool WebInterface::decodeHexFrame(const String& hex, Image& out) const
 {
     if (hex.length() != 64)
         return false;
@@ -163,7 +211,7 @@ bool decodeHexFrame(const String& hex, Image& out)
     return true;
 }
 
-String imageToHexString(const Image& image)
+String WebInterface::imageToHexString(const Image& image) const
 {
     String hex;
     hex.reserve(Image::kSize * 4);
@@ -177,25 +225,19 @@ String imageToHexString(const Image& image)
     return hex;
 }
 
-String buildStateJsonPayload()
+String WebInterface::buildStateJsonPayload()
 {
     String payload;
-    payload.reserve(256 + static_cast<int>(imageFrames.size()) * 68);
-    const AnimatedText* topSource    = gAnimatedTextTop;
-    const AnimatedText* bottomSource = gAnimatedTextBottom;
+    payload.reserve(256 + static_cast<int>(mImageFrames.size()) * 68);
     const AnimatedText::AnimationMode defaultMode = (DEFAULT_TEXT_ANIMATION_MODE == 0)
         ? AnimatedText::AnimationMode::Hold
         : AnimatedText::AnimationMode::Scroll;
 
-    std::string topValue    = topSource    ? topSource->getText()    : std::string(DEFAULT_INITIAL_TEXT);
-    std::string bottomValue = bottomSource ? bottomSource->getText() : std::string();
+    std::string topValue    = mAnimatedTextTop.getText();
+    std::string bottomValue = mAnimatedTextBottom.getText();
 
-    AnimatedText::AnimationMode topMode = topSource
-        ? topSource->getAnimationMode()
-        : defaultMode;
-    AnimatedText::AnimationMode bottomMode = bottomSource
-        ? bottomSource->getAnimationMode()
-        : defaultMode;
+    AnimatedText::AnimationMode topMode = mAnimatedTextTop.getAnimationMode();
+    AnimatedText::AnimationMode bottomMode = mAnimatedTextBottom.getAnimationMode();
 
     auto defaultFrameForMode = [](AnimatedText::AnimationMode mode) -> uint32_t {
         return (mode == AnimatedText::AnimationMode::Scroll)
@@ -203,25 +245,25 @@ String buildStateJsonPayload()
             : DEFAULT_TEXT_FRAME_DURATION_HOLD_MS;
     };
 
-    uint32_t topFrameDuration = topSource
-        ? topSource->getFrameDuration()
-        : defaultFrameForMode(topMode);
-    uint32_t bottomFrameDuration = bottomSource
-        ? bottomSource->getFrameDuration()
-        : defaultFrameForMode(bottomMode);
+    uint32_t topFrameDuration = mAnimatedTextTop.getFrameDuration();
+    if (topFrameDuration == 0)
+        topFrameDuration = defaultFrameForMode(topMode);
 
-    const AnimatedImage* imageSource = gAnimatedImage;
-    uint32_t imageFrameDuration      = imageSource ? imageSource->getFrameDuration() : DEFAULT_IMAGE_FRAME_DURATION_MS;
-    bool     imageLoop               = imageSource ? imageSource->isLooping()        : DEFAULT_IMAGE_LOOPING;
+    uint32_t bottomFrameDuration = mAnimatedTextBottom.getFrameDuration();
+    if (bottomFrameDuration == 0)
+        bottomFrameDuration = defaultFrameForMode(bottomMode);
+
+    uint32_t imageFrameDuration = mAnimatedImage.getFrameDuration();
+    bool     imageLoop          = mAnimatedImage.isLooping();
 
     payload += F("{");
     payload += F("\"mode\":\"");
-    payload += (gDisplayMode == DisplayMode::Text) ? F("text") : F("image");
+    payload += (mDisplayMode == DisplayMode::Text) ? F("text") : F("image");
     payload += F("\",");
 
     payload += F("\"text\":{");
     payload += F("\"layout\":\"");
-    payload += textLayoutToString(gTextLayout);
+    payload += textLayoutToString(mTextLayout);
     payload += F("\",\"lines\":{");
     payload += F("\"top\":{");
     payload += F("\"value\":\"");
@@ -242,23 +284,23 @@ String buildStateJsonPayload()
 
     payload += F("\"images\":{");
     payload += F("\"count\":");
-    payload += String(static_cast<unsigned long>(imageFrames.size()));
+    payload += String(static_cast<unsigned long>(mImageFrames.size()));
     payload += F(",\"frameDuration\":");
     payload += String(imageFrameDuration);
     payload += F(",\"loop\":");
     payload += imageLoop ? F("true") : F("false");
-    if (!imageFrames.empty())
+    if (!mImageFrames.empty())
     {
         payload += F(",\"firstFrame\":\"");
-        payload += imageToHexString(imageFrames.front());
+        payload += imageToHexString(mImageFrames.front());
         payload += F("\"");
     }
     payload += F("}");
     payload += F(",\"brightness\":{");
     payload += F("\"percent\":");
-    payload += String(gBrightnessPercent);
+    payload += String(mBrightnessPercent);
     payload += F(",\"duty\":");
-    payload += String(static_cast<float>(gBrightnessDuty) / static_cast<float>(kBrightnessFixedScale), 4);
+    payload += String(static_cast<float>(mBrightnessDuty) / static_cast<float>(kBrightnessFixedScale), 4);
     payload += F(",\"scale\":");
     payload += String(kBrightnessFixedScale);
     payload += F("}");
@@ -268,7 +310,7 @@ String buildStateJsonPayload()
     return payload;
 }
 
-String buildHtml()
+String WebInterface::buildHtml()
 {
     String page;
     page.reserve(4000);
@@ -361,7 +403,7 @@ String buildHtml()
     return page;
 }
 
-void sendJsonResponse(int code, bool ok, const String& message)
+void WebInterface::sendJsonResponse(int code, bool ok, const String& message)
 {
     String payload;
     payload.reserve(64 + message.length());
@@ -370,52 +412,43 @@ void sendJsonResponse(int code, bool ok, const String& message)
     payload += F(",\"message\":\"");
     payload += jsonEscape(std::string(message.c_str()));
     payload += F("\"}");
-    httpServer.send(code, "application/json", payload);
+    mHttpServer.send(code, "application/json", payload);
     Serial.print(F("[Web] JSON response: "));
     Serial.println(payload);
 }
 
-void sendStateJson()
+void WebInterface::sendStateJson()
 {
     String payload = buildStateJsonPayload();
-    httpServer.send(200, "application/json", payload);
+    mHttpServer.send(200, "application/json", payload);
     Serial.print(F("[Web] JSON response: "));
     Serial.println(payload);
 }
 
-void applyDisplayMode(DisplayMode mode)
+void WebInterface::applyDisplayMode(DisplayMode mode)
 {
-    if (gAnimatedTextTop == nullptr || gAnimatedTextBottom == nullptr || gAnimatedImage == nullptr)
-        return;
-
-    gDisplayMode = mode;
+    mDisplayMode = mode;
 }
 
-void handleRoot()
+void WebInterface::handleRoot()
 {
-    httpServer.send(200, "text/html", buildHtml());
+    mHttpServer.send(200, "text/html", buildHtml());
 }
 
-void handleApiState()
+void WebInterface::handleApiState()
 {
     sendStateJson();
 }
 
-void handleApiText()
+void WebInterface::handleApiText()
 {
-    if (!gAnimatedTextTop || !gAnimatedTextBottom)
-    {
-        sendJsonResponse(400, false, F("Text components not initialized"));
-        return;
-    }
-
-    const bool hasTopParams = httpServer.hasArg("topText") ||
-                              httpServer.hasArg("topMode") ||
-                              httpServer.hasArg("topFrameDuration");
-    const bool hasBottomParams = httpServer.hasArg("bottomText") ||
-                                 httpServer.hasArg("bottomMode") ||
-                                 httpServer.hasArg("bottomFrameDuration");
-    const bool hasLayout = httpServer.hasArg("layout");
+    const bool hasTopParams = mHttpServer.hasArg("topText") ||
+                              mHttpServer.hasArg("topMode") ||
+                              mHttpServer.hasArg("topFrameDuration");
+    const bool hasBottomParams = mHttpServer.hasArg("bottomText") ||
+                                 mHttpServer.hasArg("bottomMode") ||
+                                 mHttpServer.hasArg("bottomFrameDuration");
+    const bool hasLayout = mHttpServer.hasArg("layout");
 
     if (!hasTopParams && !hasBottomParams && !hasLayout)
     {
@@ -423,82 +456,75 @@ void handleApiText()
         return;
     }
 
-    auto updateLine = [&](AnimatedText* target,
+    auto updateLine = [&](AnimatedText& target,
                           const char* textKey,
                           const char* modeKey,
                           const char* frameKey,
                           bool shouldUpdate)
     {
-        if (!shouldUpdate || target == nullptr)
+        if (!shouldUpdate)
             return;
 
         bool updated = false;
 
-        if (httpServer.hasArg(textKey))
+        if (mHttpServer.hasArg(textKey))
         {
-            target->setText(httpServer.arg(textKey).c_str());
+            target.setText(mHttpServer.arg(textKey).c_str());
             updated = true;
         }
 
-        if (httpServer.hasArg(modeKey))
+        if (mHttpServer.hasArg(modeKey))
         {
-            AnimatedText::AnimationMode modeArg = parseTextMode(httpServer.arg(modeKey));
-            target->setAnimationMode(modeArg);
-            target->setFrameDuration(modeArg == AnimatedText::AnimationMode::Hold
+            AnimatedText::AnimationMode modeArg = parseTextMode(mHttpServer.arg(modeKey));
+            target.setAnimationMode(modeArg);
+            target.setFrameDuration(modeArg == AnimatedText::AnimationMode::Hold
                 ? DEFAULT_TEXT_FRAME_DURATION_HOLD_MS
                 : DEFAULT_TEXT_FRAME_DURATION_LOOP_MS);
             updated = true;
         }
 
-        if (httpServer.hasArg(frameKey))
+        if (mHttpServer.hasArg(frameKey))
         {
-            int frameDuration = httpServer.arg(frameKey).toInt();
+            int frameDuration = mHttpServer.arg(frameKey).toInt();
             if (frameDuration < 0)
                 frameDuration = 0;
 
-            target->setFrameDuration(static_cast<uint32_t>(frameDuration));
+            target.setFrameDuration(static_cast<uint32_t>(frameDuration));
             updated = true;
         }
 
         if (updated)
         {
-            target->reset();
+            target.reset();
         }
     };
 
-    updateLine(gAnimatedTextTop, "topText", "topMode", "topFrameDuration", hasTopParams);
-    updateLine(gAnimatedTextBottom, "bottomText", "bottomMode", "bottomFrameDuration", hasBottomParams);
+    updateLine(mAnimatedTextTop, "topText", "topMode", "topFrameDuration", hasTopParams);
+    updateLine(mAnimatedTextBottom, "bottomText", "bottomMode", "bottomFrameDuration", hasBottomParams);
 
     if (hasLayout)
     {
-        gTextLayout = parseTextLayout(httpServer.arg("layout"));
+        mTextLayout = parseTextLayout(mHttpServer.arg("layout"));
     }
 
     sendJsonResponse(200, true, F("Text configuration updated"));
 }
 
-void handleApiImages()
+void WebInterface::handleApiImages()
 {
-    if (!gAnimatedImage)
-    {
-        sendJsonResponse(400, false, F("Image component not initialized"));
-        return;
-    }  
-
-
-    if (!httpServer.hasArg("frames"))
+    if (!mHttpServer.hasArg("frames"))
     {
         sendJsonResponse(400, false, F("Missing frames parameter"));
         return;
     }
 
-    String framesArg = httpServer.arg("frames");
+    String framesArg = mHttpServer.arg("frames");
     framesArg.trim();
 
     if (framesArg.length() == 0)
     {
-        imageFrames.clear();
-        gAnimatedImage->clearFrames();
+        mImageFrames.clear();
+        mAnimatedImage.clearFrames();
 
         sendJsonResponse(200, true, F("Frames cleared"));
         return;
@@ -536,38 +562,38 @@ void handleApiImages()
         return;
     }
 
-    imageFrames = std::move(newFrames);
-    gAnimatedImage->setFrames(imageFrames);
+    mImageFrames = std::move(newFrames);
+    mAnimatedImage.setFrames(mImageFrames);
 
-    if (httpServer.hasArg("frameDuration"))
+    if (mHttpServer.hasArg("frameDuration"))
     {
-        long frameDuration = httpServer.arg("frameDuration").toInt();
+        long frameDuration = mHttpServer.arg("frameDuration").toInt();
         if (frameDuration < 0)
             frameDuration = 0;
 
-        gAnimatedImage->setFrameDuration(frameDuration);
+        mAnimatedImage.setFrameDuration(static_cast<uint32_t>(frameDuration));
     }
 
-    if (httpServer.hasArg("loop"))
+    if (mHttpServer.hasArg("loop"))
     {
-        bool looping = (httpServer.arg("loop").toInt() != 0);
-        gAnimatedImage->setLooping(looping);
+        bool looping = (mHttpServer.arg("loop").toInt() != 0);
+        mAnimatedImage.setLooping(looping);
 
     }
 
-    gAnimatedImage->reset();
+    mAnimatedImage.reset();
     sendJsonResponse(200, true, F("Image sequence updated"));
 }
 
-void handleApiBrightness()
+void WebInterface::handleApiBrightness()
 {
-    if (!httpServer.hasArg("value"))
+    if (!mHttpServer.hasArg("value"))
     {
         sendJsonResponse(400, false, F("Missing value parameter"));
         return;
     }
 
-    float percent = httpServer.arg("value").toFloat();
+    float percent = mHttpServer.arg("value").toFloat();
     if (percent < 0.0f)
         percent = 0.0f;
     if (percent > 100.0f)
@@ -576,7 +602,7 @@ void handleApiBrightness()
     updateBrightnessFromPercent(static_cast<uint8_t>(percent + 0.5f));
 
     String message = F("Brightness set to ");
-    message += String(static_cast<int>(gBrightnessPercent));
+    message += String(static_cast<int>(mBrightnessPercent));
     message += F("%");
 
     String payload;
@@ -585,27 +611,27 @@ void handleApiBrightness()
     payload += jsonEscape(std::string(message.c_str()));
     payload += F("\",\"brightness\":{");
     payload += F("\"percent\":");
-    payload += String(static_cast<int>(gBrightnessPercent));
+    payload += String(static_cast<int>(mBrightnessPercent));
     payload += F(",\"duty\":");
-    payload += String(static_cast<float>(gBrightnessDuty) / static_cast<float>(kBrightnessFixedScale), 4);
+    payload += String(static_cast<float>(mBrightnessDuty) / static_cast<float>(kBrightnessFixedScale), 4);
     payload += F(",\"scale\":");
     payload += String(kBrightnessFixedScale);
     payload += F("}}");
 
-    httpServer.send(200, "application/json", payload);
+    mHttpServer.send(200, "application/json", payload);
     Serial.print(F("[Web] JSON response: "));
     Serial.println(payload);
 }
 
-void handleApiMode()
+void WebInterface::handleApiMode()
 {
-    if (!httpServer.hasArg("mode"))
+    if (!mHttpServer.hasArg("mode"))
     {
         sendJsonResponse(400, false, F("Missing mode parameter"));
         return;
     }
 
-    String modeArg = httpServer.arg("mode");
+    String modeArg = mHttpServer.arg("mode");
     modeArg.toLowerCase();
     if (modeArg == "image")
     {
@@ -619,72 +645,7 @@ void handleApiMode()
     }
 }
 
-void handleNotFound()
+void WebInterface::handleNotFound()
 {
-    httpServer.send(404, "text/plain", "Not Found");
+    mHttpServer.send(404, "text/plain", "Not Found");
 }
-
-} // namespace
-
-void WebInterface_begin(AnimatedText& animatedTextTop,
-                        AnimatedText& animatedTextBottom,
-                        AnimatedImage& animatedImage,
-                        const char* wifiSsid,
-                        const char* wifiPassword,
-                        const char* wifiHostname)
-{
-    gAnimatedTextTop    = &animatedTextTop;
-    gAnimatedTextBottom = &animatedTextBottom;
-    gAnimatedImage      = &animatedImage;
-
-    updateBrightnessFromPercent(gBrightnessPercent);
-    
-    imageFrames.clear();
-
-
-    httpServer.on("/", handleRoot);
-    httpServer.on("/api/state", HTTP_GET, handleApiState);
-    httpServer.on("/api/text", HTTP_POST, handleApiText);
-    httpServer.on("/api/images", HTTP_POST, handleApiImages);
-    httpServer.on("/api/brightness", HTTP_POST, handleApiBrightness);
-    httpServer.on("/api/mode", HTTP_POST, handleApiMode);
-    httpServer.onNotFound(handleNotFound);
-    httpServer.begin();
-
-    Serial.print(F("HTTP server started. Open http://"));
-    if (WiFi.status() == WL_CONNECTED)
-    {
-        Serial.println(WiFi.localIP());
-    }
-    else
-    {
-        Serial.println(F("device-local"));
-    }
-}
-
-void WebInterface_handle()
-{
-    httpServer.handleClient();
-}
-
-DisplayMode WebInterface_getDisplayMode()
-{
-    return gDisplayMode;
-}
-
-TextLayout WebInterface_getTextLayout()
-{
-    return gTextLayout;
-}
-
-uint16_t WebInterface_getBrightnessDuty()
-{
-    return gBrightnessDuty;
-}
-
-uint16_t WebInterface_getBrightnessScale()
-{
-    return kBrightnessFixedScale;
-}
-
-
