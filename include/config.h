@@ -3,10 +3,10 @@
 #include <stdint.h>
 
 // hardware related stuff
-constexpr int      PIN_SR_DATA  = 1;
-constexpr int      PIN_SR_CLK   = 4;
-constexpr int      PIN_SR_LATCH = 2;
-constexpr int      PIN_SR_OE    = 0;
+constexpr int      PIN_SR_DATA  = 40;
+constexpr int      PIN_SR_CLK   = 42;
+constexpr int      PIN_SR_LATCH = 41;
+constexpr int      PIN_SR_OE    = 21;
 
 constexpr uint32_t SHIFTREG_SPI_FREQUENCY_HZ = 4'000'000;
 

@@ -6,16 +6,17 @@ void ShiftRegisterChain::begin()
 {
     if (gBackend == nullptr)
         return;
-
+        
+    gBackend->gpio.digitalWrite(oePin, HIGH);
     gBackend->gpio.pinMode(latchPin, OUTPUT);
     gBackend->gpio.pinMode(oePin, OUTPUT);
-    gBackend->gpio.digitalWrite(oePin, HIGH);
     gBackend->gpio.digitalWrite(latchPin, HIGH);
 
     gBackend->spi.begin(clockPin, -1, dataPin, -1);
     spiInitialized = true;
 
     writeWord(~0);
+    gBackend->gpio.digitalWrite(oePin, LOW);
 }
 
 void ShiftRegisterChain::enableOutput(bool enable)
