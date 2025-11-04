@@ -19,7 +19,8 @@ enum class TextLayout
 {
     Dual,
     SingleTop,
-    SingleBottom
+    SingleBottom,
+    Center
 };
 
 class WebInterface

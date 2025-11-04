@@ -79,12 +79,16 @@ static Matrix16x16 composeTextFrame(uint32_t nowMs)
                 animatedTextBottom.setVerticalAlignment(AnimatedText::VerticalAlignment::LowerHalf);
                 break;
             case TextLayout::SingleTop:
-                animatedTextTop.setVerticalAlignment(AnimatedText::VerticalAlignment::Full);
+                animatedTextTop.setVerticalAlignment(AnimatedText::VerticalAlignment::UpperHalf);
                 animatedTextBottom.setVerticalAlignment(AnimatedText::VerticalAlignment::LowerHalf);
                 break;
             case TextLayout::SingleBottom:
                 animatedTextTop.setVerticalAlignment(AnimatedText::VerticalAlignment::UpperHalf);
-                animatedTextBottom.setVerticalAlignment(AnimatedText::VerticalAlignment::Full);
+                animatedTextBottom.setVerticalAlignment(AnimatedText::VerticalAlignment::LowerHalf);
+                break;
+            case TextLayout::Center:
+                animatedTextTop.setVerticalAlignment(AnimatedText::VerticalAlignment::Full);
+                animatedTextBottom.setVerticalAlignment(AnimatedText::VerticalAlignment::LowerHalf);
                 break;
             default:
                 break;
@@ -104,6 +108,8 @@ static Matrix16x16 composeTextFrame(uint32_t nowMs)
             return topFrame;
         case TextLayout::SingleBottom:
             return bottomFrame;
+        case TextLayout::Center:
+            return topFrame;
         default:
             topFrame.merge(bottomFrame);
             return topFrame;
